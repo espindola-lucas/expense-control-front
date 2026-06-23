@@ -1,0 +1,26 @@
+services:
+  # ── Development ────────────────────────────────────────────────────────────
+  app-dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      target: dev
+    ports:
+      - "3100:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - APP_URL=${APP_URL}
+      - DISABLE_HMR=false
+
+  # ── Production ─────────────────────────────────────────────────────────────
+  app-prod:
+    profiles: ["prod"]
+    build:
+      context: .
+      target: prod
+      args:
+        APP_URL: ${APP_URL}
+    ports:
+      - "3100:80"

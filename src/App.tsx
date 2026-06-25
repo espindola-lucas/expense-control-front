@@ -1,22 +1,39 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  BarChart3, 
-  Calendar, 
-  ChevronRight, 
-  History, 
-  LayoutDashboard, 
-  LogOut, 
-  Plus, 
-  Search, 
-  Settings, 
-  Trash2, 
-  User, 
+import {
+  BarChart3,
+  Calendar,
+  History,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  Plus,
+  Search,
+  Settings,
+  Trash2,
+  User,
   Wallet,
   X,
   Edit2
 } from 'lucide-react';
-import { Expense, MonthlyBudget, View } from './types';
+import { AuthUser, DashboardSummary, Expense, PersonalConfiguration, View } from './types';
+
+const MONTHS = [
+  { value: '01', label: 'Enero' },
+  { value: '02', label: 'Febrero' },
+  { value: '03', label: 'Marzo' },
+  { value: '04', label: 'Abril' },
+  { value: '05', label: 'Mayo' },
+  { value: '06', label: 'Junio' },
+  { value: '07', label: 'Julio' },
+  { value: '08', label: 'Agosto' },
+  { value: '09', label: 'Septiembre' },
+  { value: '10', label: 'Octubre' },
+  { value: '11', label: 'Noviembre' },
+  { value: '12', label: 'Diciembre' },
+];
+
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3101/api';
 
 // --- Components ---
 
@@ -97,90 +114,225 @@ const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean; onClose:
 export default function App() {
   // State
   const [view, setView] = useState<View>('login');
-  const [user, setUser] = useState<{ email: string } | null>(null);
-  const [expenses, setExpenses] = useState<Expense[]>(() => {
-    const saved = localStorage.getItem('expenses');
-    return saved ? JSON.parse(saved) : [];
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authError, setAuthError] = useState('');
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [dashboardSummary, setDashboardSummary] = useState<DashboardSummary>({
+    monthly_balance: null,
+    percentageUsed: null,
+    hasConfiguration: false,
   });
-  const [budgets, setBudgets] = useState<MonthlyBudget[]>(() => {
-    const saved = localStorage.getItem('budgets');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [isSpentsLoading, setIsSpentsLoading] = useState(false);
+  const [configurations, setConfigurations] = useState<PersonalConfiguration[]>([]);
+  const [isConfigLoading, setIsConfigLoading] = useState(false);
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [editingConfig, setEditingConfig] = useState<PersonalConfiguration | null>(null);
   const [filter, setFilter] = useState('');
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
-  const [isBudgetModalOpen, setIsBudgetModalOpen] = useState(false);
 
-  // Persistence
+  // Restore session on mount
   useEffect(() => {
-    localStorage.setItem('expenses', JSON.stringify(expenses));
-  }, [expenses]);
+    const storedUser = localStorage.getItem('auth_user');
+    if (localStorage.getItem('auth_token') && storedUser) {
+      setUser(JSON.parse(storedUser));
+      setView('dashboard');
+    }
+  }, []);
 
+  const fetchSpents = async () => {
+    setIsSpentsLoading(true);
+    try {
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(`${API_URL}/spents`, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setExpenses(json.spents);
+        setDashboardSummary({
+          monthly_balance:  json.monthly_balance,
+          percentageUsed:   json.percentageUsed,
+          hasConfiguration: json.hasConfiguration,
+        });
+      }
+    } catch { /* ignore network errors */ } finally {
+      setIsSpentsLoading(false);
+    }
+  };
+
+  // Fetch spents from API whenever the user is set
   useEffect(() => {
-    localStorage.setItem('budgets', JSON.stringify(budgets));
-  }, [budgets]);
+    if (!user) return;
+    fetchSpents();
+  }, [user]);
+
+  // Fetch personal configurations from API whenever the user is set
+  useEffect(() => {
+    if (!user) return;
+    fetchConfigurations();
+  }, [user]);
+
+  const fetchConfigurations = async () => {
+    setIsConfigLoading(true);
+    try {
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(`${API_URL}/personal-configurations`, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setConfigurations(json);
+      }
+    } catch { /* ignore */ } finally {
+      setIsConfigLoading(false);
+    }
+  };
 
   // Calculations
   const currentMonth = new Date().toISOString().slice(0, 7);
-  const currentBudget = budgets.find(b => b.month === currentMonth)?.availableFunds ?? 0;
-  
   const currentMonthExpenses = expenses.filter(e => e.date.startsWith(currentMonth));
-  const totalSpent = currentMonthExpenses.reduce((sum, e) => sum + e.amount, 0);
-  const remaining = currentBudget - totalSpent;
-  const spentPercentage = currentBudget > 0 ? Math.min((totalSpent / currentBudget) * 100, 100) : 0;
 
   const filteredExpenses = expenses.filter(e => 
     e.name.toLowerCase().includes(filter.toLowerCase())
   ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   // Handlers
-  const handleAuth = (e: React.FormEvent) => {
+  const handleAuth = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    setUser({ email: 'demo@example.com' });
-    setView('dashboard');
+    setAuthError('');
+    setIsAuthLoading(true);
+
+    const formData = new FormData(e.currentTarget);
+
+    try {
+      const res = await fetch(`${API_URL}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          email: formData.get('email'),
+          password: formData.get('password'),
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setAuthError(data.message ?? 'Authentication failed.');
+        return;
+      }
+
+      localStorage.setItem('auth_token', data.token);
+      localStorage.setItem('auth_user', JSON.stringify(data.user));
+      setUser(data.user);
+      setView('dashboard');
+    } catch {
+      setAuthError('Could not reach the server. Check your connection.');
+    } finally {
+      setIsAuthLoading(false);
+    }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const token = localStorage.getItem('auth_token');
+    if (token) {
+      try {
+        await fetch(`${API_URL}/logout`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+        });
+      } catch { /* ignore network errors on logout */ }
+    }
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_user');
     setUser(null);
     setView('login');
   };
 
-  const handleAddExpense = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleAddExpense = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const name = formData.get('name') as string;
-    const amount = parseFloat(formData.get('amount') as string);
-    const date = formData.get('date') as string;
+    const payload = {
+      name:   formData.get('name') as string,
+      amount: parseFloat(formData.get('amount') as string),
+      date:   formData.get('date') as string,
+    };
 
-    if (editingExpense) {
-      setExpenses(expenses.map(ex => ex.id === editingExpense.id ? { ...ex, name, amount, date } : ex));
-    } else {
-      setExpenses([{ id: crypto.randomUUID(), name, amount, date }, ...expenses]);
+    const token  = localStorage.getItem('auth_token');
+    const url    = editingExpense ? `${API_URL}/spents/${editingExpense.id}` : `${API_URL}/spents`;
+    const method = editingExpense ? 'PUT' : 'POST';
+
+    const res = await fetch(url, {
+      method,
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) {
+      setIsExpenseModalOpen(false);
+      setEditingExpense(null);
+      await fetchSpents();
     }
-    
-    setIsExpenseModalOpen(false);
-    setEditingExpense(null);
   };
 
-  const handleAddBudget = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSaveConfig = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const month = formData.get('month') as string;
-    const availableFunds = parseFloat(formData.get('funds') as string);
+    const token = localStorage.getItem('auth_token');
+    const payload = {
+      start_counting:           formData.get('start_counting'),
+      end_counting:             formData.get('end_counting'),
+      available_money:          parseFloat(formData.get('available_money') as string),
+      month_available_money:    formData.get('month_available_money'),
+      expense_percentage_limit: parseFloat(formData.get('expense_percentage_limit') as string),
+    };
 
-    const existingIndex = budgets.findIndex(b => b.month === month);
-    if (existingIndex > -1) {
-      const newBudgets = [...budgets];
-      newBudgets[existingIndex] = { ...newBudgets[existingIndex], availableFunds };
-      setBudgets(newBudgets);
-    } else {
-      setBudgets([...budgets, { id: crypto.randomUUID(), month, availableFunds }]);
-    }
-    setIsBudgetModalOpen(false);
+    const url    = editingConfig ? `${API_URL}/personal-configurations/${editingConfig.id}` : `${API_URL}/personal-configurations`;
+    const method = editingConfig ? 'PUT' : 'POST';
+
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        await fetchConfigurations();
+        setIsConfigModalOpen(false);
+        setEditingConfig(null);
+      }
+    } catch { /* ignore */ }
   };
 
-  const deleteExpense = (id: string) => {
-    setExpenses(expenses.filter(e => e.id !== id));
+  const handleDeleteConfig = async (id: number) => {
+    const token = localStorage.getItem('auth_token');
+    try {
+      const res = await fetch(`${API_URL}/personal-configurations/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+      });
+      if (res.ok) {
+        setConfigurations(prev => prev.filter(c => c.id !== id));
+      }
+    } catch { /* ignore */ }
+  };
+
+  const openEditConfig = (config: PersonalConfiguration) => {
+    setEditingConfig(config);
+    setIsConfigModalOpen(true);
+  };
+
+  const deleteExpense = async (id: string) => {
+    const token = localStorage.getItem('auth_token');
+    const res = await fetch(`${API_URL}/spents/${id}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+    });
+    if (res.ok) {
+      await fetchSpents();
+    }
   };
 
   const openEditExpense = (expense: Expense) => {
@@ -205,7 +357,7 @@ export default function App() {
           className="w-full max-w-md border border-brand-border bg-brand-surface rounded-[40px] p-10 relative z-10 shadow-2xl"
         >
           <div className="mb-10 text-center">
-            <h1 className="text-4xl font-serif italic mb-2 tracking-tight">Eclipse</h1>
+            <h1 className="text-4xl font-serif italic mb-2 tracking-tight">Expense Control</h1>
             <p className="text-neutral-500 font-medium tracking-wider text-xs uppercase">
               {view === 'login' ? 'Monthly Expense Engine' : 'Join the Collective'}
             </p>
@@ -214,22 +366,26 @@ export default function App() {
           <form onSubmit={handleAuth} className="space-y-6">
             <div className="space-y-2">
               <label className="text-xs uppercase tracking-widest text-neutral-500 font-semibold ml-1">Identity</label>
-              <Input type="email" placeholder="Email contact" required />
+              <Input name="email" type="email" placeholder="Email contact" required />
             </div>
             <div className="space-y-2">
               <label className="text-xs uppercase tracking-widest text-neutral-500 font-semibold ml-1">Encryption</label>
-              <Input type="password" placeholder="••••••••" required />
+              <Input name="password" type="password" placeholder="••••••••" required />
             </div>
 
-            <Button type="submit" className="w-full py-4 text-base mt-4">
-              {view === 'login' ? 'Enter System' : 'Create Access'}
+            {authError && (
+              <p className="text-red-400 text-sm text-center">{authError}</p>
+            )}
+
+            <Button type="submit" className="w-full py-4 text-base mt-4" onClick={undefined}>
+              {isAuthLoading ? 'Authenticating…' : view === 'login' ? 'Enter System' : 'Create Access'}
             </Button>
           </form>
 
           <p className="mt-8 text-center text-neutral-500 text-sm">
             {view === 'login' ? "New member?" : "Already verified?"}
-            <button 
-              onClick={() => setView(view === 'login' ? 'register' : 'login')}
+            <button
+              onClick={() => { setView(view === 'login' ? 'register' : 'login'); setAuthError(''); }}
               className="ml-2 text-white hover:underline font-medium cursor-pointer"
             >
               {view === 'login' ? 'Secure Registration' : 'Return to Login'}
@@ -241,54 +397,92 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row bg-brand-bg">
-      {/* Sidebar Navigation */}
-      <aside className="w-full md:w-20 lg:w-64 border-b md:border-b-0 md:border-r border-brand-border bg-brand-surface p-4 md:p-6 flex flex-col items-center lg:items-stretch gap-8 relative z-30">
-        <div className="flex items-center gap-3 px-2">
-          <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-black">
-            <BarChart3 size={24} />
+    <div className="min-h-screen flex flex-col bg-brand-bg">
+      {/* Top navbar */}
+      <nav className="sticky top-0 z-40 h-16 border-b border-brand-border bg-brand-surface px-4 md:px-8 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center text-black">
+            <BarChart3 size={18} />
           </div>
-          <span className="hidden lg:block text-xl font-serif italic font-semibold">Eclipse</span>
+          <span className="text-lg font-serif italic font-semibold">Eclipse</span>
         </div>
+        <button
+          onClick={() => setIsMenuOpen(v => !v)}
+          className="p-2 rounded-xl hover:bg-neutral-800 transition-colors cursor-pointer"
+          aria-label="Toggle menu"
+        >
+          {isMenuOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
+      </nav>
 
-        <nav className="flex-1 space-y-2 w-full">
-          <button 
-            onClick={() => setView('dashboard')}
-            className={`w-full flex items-center gap-3 p-3 rounded-2xl transition-all duration-200 cursor-pointer ${view === 'dashboard' ? 'bg-white text-black' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
-          >
-            <LayoutDashboard size={20} />
-            <span className="hidden lg:block font-medium">Dashboard</span>
-          </button>
-          <button 
-            onClick={() => setView('settings')}
-            className={`w-full flex items-center gap-3 p-3 rounded-2xl transition-all duration-200 cursor-pointer ${view === 'settings' ? 'bg-white text-black' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
-          >
-            <Settings size={20} />
-            <span className="hidden lg:block font-medium">Monthly Settings</span>
-          </button>
-        </nav>
+      {/* Hamburger dropdown */}
+      <AnimatePresence>
+        {isMenuOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMenuOpen(false)}
+              className="fixed inset-0 top-16 z-30 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.15 }}
+              className="fixed top-16 left-0 right-0 z-40 bg-brand-surface border-b border-brand-border overflow-y-auto"
+              style={{ maxHeight: 'calc(100vh - 4rem)' }}
+            >
+              <div className="p-4 space-y-1 max-w-sm mx-auto">
+                <div className="flex items-center gap-3 p-3 mb-3 rounded-2xl bg-neutral-900/60 border border-brand-border">
+                  <div className="w-9 h-9 rounded-full bg-neutral-800 flex items-center justify-center text-sm font-semibold shrink-0">
+                    {user?.name?.charAt(0).toUpperCase() ?? '?'}
+                  </div>
+                  <div className="flex-1 overflow-hidden">
+                    <p className="text-sm font-semibold truncate">{user?.name}</p>
+                    <p className="text-[11px] text-neutral-500 truncate">{user?.email}</p>
+                  </div>
+                </div>
 
-        <div className="mt-auto w-full space-y-4">
-          <div className="hidden lg:flex items-center gap-3 p-3 rounded-2xl bg-neutral-900/50 border border-brand-border">
-            <div className="w-8 h-8 rounded-full bg-neutral-800 flex items-center justify-center text-xs">A</div>
-            <div className="flex-1 overflow-hidden">
-              <p className="text-xs font-medium truncate">demo@example.com</p>
-            </div>
-          </div>
-          <button 
-            onClick={handleLogout}
-            className="w-full flex items-center justify-center lg:justify-start gap-3 p-3 text-red-500 hover:bg-red-500/10 rounded-2xl transition-all cursor-pointer"
-          >
-            <LogOut size={20} />
-            <span className="hidden lg:block font-medium">Terminate Session</span>
-          </button>
-        </div>
-      </aside>
+                <button
+                  onClick={() => { setView('dashboard'); setIsMenuOpen(false); }}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all cursor-pointer ${view === 'dashboard' ? 'bg-white text-black' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
+                >
+                  <LayoutDashboard size={20} />
+                  <span className="font-medium">Dashboard</span>
+                </button>
+
+                <button
+                  onClick={() => { setView('settings'); setIsMenuOpen(false); }}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all cursor-pointer ${view === 'settings' ? 'bg-white text-black' : 'text-neutral-400 hover:text-white hover:bg-neutral-800'}`}
+                >
+                  <Settings size={20} />
+                  <span className="font-medium">Monthly Settings</span>
+                </button>
+
+                <div className="pt-2 border-t border-brand-border mt-2">
+                  <button
+                    onClick={handleLogout}
+                    className="w-full flex items-center gap-3 px-4 py-3 text-red-400 hover:bg-red-500/10 rounded-2xl transition-all cursor-pointer"
+                  >
+                    <LogOut size={20} />
+                    <span className="font-medium">Terminate Session</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto p-4 md:p-10 space-y-10">
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-6">
           <div>
+            <p className="text-xs uppercase tracking-widest text-neutral-500 font-semibold mb-1">
+              Welcome back, {user?.name}
+            </p>
             <h2 className="text-4xl md:text-5xl font-serif italic tracking-tight mb-2">
               {view === 'dashboard' ? 'Overview' : 'Infrastructure'}
             </h2>
@@ -303,9 +497,9 @@ export default function App() {
               New Expense
             </Button>
           ) : (
-            <Button onClick={() => setIsBudgetModalOpen(true)} className="px-6 py-4 rounded-3xl">
+            <Button onClick={() => { setEditingConfig(null); setIsConfigModalOpen(true); }} className="px-6 py-4 rounded-3xl">
               <Plus size={20} />
-              Set Budget
+              New Period
             </Button>
           )}
         </header>
@@ -319,7 +513,9 @@ export default function App() {
                   <div className="flex justify-between items-start">
                     <div className="space-y-1">
                       <p className="text-xs uppercase tracking-widest text-neutral-500 font-semibold font-sans">Current Liquidity</p>
-                      <h3 className="text-5xl md:text-6xl font-serif italic">${remaining.toLocaleString()}</h3>
+                      <h3 className="text-5xl md:text-6xl font-serif italic">
+                        ${dashboardSummary.monthly_balance?.restMoney ?? '—'}
+                      </h3>
                     </div>
                     <div className="w-14 h-14 rounded-full border border-white/20 flex items-center justify-center group-hover:scale-110 transition-transform duration-500">
                       <Wallet size={24} />
@@ -329,11 +525,21 @@ export default function App() {
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 pt-6 border-t border-white/5">
                     <div className="space-y-1">
                       <p className="text-[10px] uppercase tracking-widest text-neutral-500 font-bold">Planned Available</p>
-                      <p className="text-lg font-medium">${currentBudget.toLocaleString()}</p>
+                      <p className="text-lg font-medium">
+                        ${dashboardSummary.monthly_balance?.avalaibleMoney ?? '—'}
+                      </p>
                     </div>
                     <div className="space-y-1">
                       <p className="text-[10px] uppercase tracking-widest text-neutral-500 font-bold">Total Burn</p>
-                      <p className="text-lg font-medium text-red-400">${totalSpent.toLocaleString()}</p>
+                      <p className="text-lg font-medium text-red-400">
+                        ${dashboardSummary.monthly_balance?.totalPrice ?? '—'}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[10px] uppercase tracking-widest text-neutral-500 font-bold">Entries</p>
+                      <p className="text-lg font-medium">
+                        {dashboardSummary.monthly_balance?.countSpent ?? '—'}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -345,17 +551,21 @@ export default function App() {
                 <div className="space-y-4">
                   <div className="flex justify-between items-end">
                     <p className="text-xs uppercase tracking-widest text-neutral-500 font-semibold">Spending Threshold</p>
-                    <span className="text-2xl font-serif italic">{Math.round(spentPercentage)}%</span>
+                    <span className="text-2xl font-serif italic">
+                      {dashboardSummary.percentageUsed?.percentageUser ?? 0}%
+                    </span>
                   </div>
                   <div className="h-3 bg-neutral-800 rounded-full overflow-hidden">
-                    <motion.div 
+                    <motion.div
                       initial={{ width: 0 }}
-                      animate={{ width: `${spentPercentage}%` }}
+                      animate={{ width: `${dashboardSummary.percentageUsed?.percentageUser ?? 0}%` }}
                       transition={{ duration: 1, ease: "easeOut" }}
-                      className={`h-full rounded-full ${spentPercentage > 90 ? 'bg-red-500' : spentPercentage > 70 ? 'bg-orange-400' : 'bg-white'}`}
+                      className={`h-full rounded-full ${
+                        dashboardSummary.percentageUsed?.color === 'red' ? 'bg-red-500' : 'bg-white'
+                      }`}
                     />
                   </div>
-                  <p className="text-[10px] text-neutral-500">Relative to current monthly setting</p>
+                  <p className="text-[10px] text-neutral-500">Relative to current period configuration</p>
                 </div>
                 
                 <div className="mt-8 flex items-center gap-4 p-4 rounded-2xl bg-white/5 border border-white/5">
@@ -386,95 +596,143 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                <AnimatePresence mode="popLayout">
-                  {filteredExpenses.map((expense) => (
-                    <motion.div
-                      layout
-                      key={expense.id}
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.95 }}
-                      className="group bg-neutral-900/50 border border-brand-border hover:border-neutral-700 rounded-2xl p-5 transition-all duration-300"
-                    >
-                      <div className="flex justify-between items-start mb-4">
-                        <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-neutral-800 text-[10px] uppercase font-bold tracking-widest text-neutral-400">
-                          <Calendar size={12} />
-                          {expense.date}
+              {isSpentsLoading ? (
+                <div className="py-20 text-center">
+                  <p className="text-neutral-500 font-medium animate-pulse">Loading entries…</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  <AnimatePresence mode="popLayout">
+                    {filteredExpenses.map((expense) => (
+                      <motion.div
+                        layout
+                        key={expense.id}
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                        className="group bg-neutral-900/50 border border-brand-border hover:border-neutral-700 rounded-2xl p-5 transition-all duration-300"
+                      >
+                        <div className="flex justify-between items-start mb-4">
+                          <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-neutral-800 text-[10px] uppercase font-bold tracking-widest text-neutral-400">
+                            <Calendar size={12} />
+                            {expense.date}
+                          </div>
+                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => openEditExpense(expense)}
+                              className="p-2 hover:bg-neutral-800 rounded-xl text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                            <button
+                              onClick={() => deleteExpense(expense.id)}
+                              className="p-2 hover:bg-red-500/10 rounded-xl text-neutral-400 hover:text-red-500 transition-colors cursor-pointer"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button 
-                            onClick={() => openEditExpense(expense)}
-                            className="p-2 hover:bg-neutral-800 rounded-xl text-neutral-400 hover:text-white transition-colors cursor-pointer"
-                          >
-                            <Edit2 size={14} />
-                          </button>
-                          <button 
-                            onClick={() => deleteExpense(expense.id)}
-                            className="p-2 hover:bg-red-500/10 rounded-xl text-neutral-400 hover:text-red-500 transition-colors cursor-pointer"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                      
-                      <div className="space-y-1">
-                        <h4 className="font-medium text-neutral-200 truncate">{expense.name}</h4>
-                        <p className="text-2xl font-serif italic text-white">${expense.amount.toLocaleString()}</p>
-                      </div>
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
 
-                {filteredExpenses.length === 0 && (
-                  <div className="col-span-full py-20 text-center border border-dashed border-neutral-800 rounded-[32px]">
-                    <p className="text-neutral-500 font-medium">No system entries detected for this query.</p>
-                  </div>
-                )}
-              </div>
+                        <div className="space-y-1">
+                          <h4 className="font-medium text-neutral-200 truncate">{expense.name}</h4>
+                          <p className="text-2xl font-serif italic text-white">${expense.amount.toLocaleString()}</p>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+
+                  {filteredExpenses.length === 0 && (
+                    <div className="col-span-full py-20 text-center border border-dashed border-neutral-800 rounded-[32px]">
+                      <p className="text-neutral-500 font-medium">No system entries detected for this query.</p>
+                    </div>
+                  )}
+                </div>
+              )}
             </section>
           </div>
         ) : (
           /* Settings View */
           <div className="space-y-6">
+            <Card className="flex items-center gap-6">
+              <div className="w-16 h-16 rounded-2xl bg-neutral-800 flex items-center justify-center text-2xl font-serif italic shrink-0">
+                {user?.name?.charAt(0).toUpperCase() ?? '?'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] uppercase tracking-widest text-neutral-500 font-semibold mb-1">Active identity</p>
+                <p className="text-xl font-medium truncate">{user?.name}</p>
+                <p className="text-sm text-neutral-400 truncate">{user?.email}</p>
+              </div>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-brand-border text-[10px] uppercase tracking-widest text-neutral-500 font-bold shrink-0">
+                <User size={12} />
+                ID #{user?.id}
+              </div>
+            </Card>
+
             <Card className="p-0 overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-brand-border bg-white/[0.02]">
-                      <th className="px-8 py-5 text-xs uppercase tracking-widest text-neutral-500 font-bold">Reporting Month</th>
-                      <th className="px-8 py-5 text-xs uppercase tracking-widest text-neutral-500 font-bold">Planned Liquidity</th>
-                      <th className="px-8 py-5 text-xs uppercase tracking-widest text-neutral-500 font-bold text-right">Identifier</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {budgets.sort((a,b) => b.month.localeCompare(a.month)).map((budget) => (
-                      <tr key={budget.id} className="border-b border-brand-border last:border-0 hover:bg-white/[0.01] transition-colors group">
-                        <td className="px-8 py-6">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-neutral-800 flex items-center justify-center text-white">
-                              <Calendar size={18} />
+                {isConfigLoading ? (
+                  <p className="px-8 py-20 text-center text-neutral-500 font-medium animate-pulse">Loading periods…</p>
+                ) : (
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-brand-border bg-white/[0.02]">
+                        <th className="px-8 py-5 text-xs uppercase tracking-widest text-neutral-500 font-bold">Month</th>
+                        <th className="px-8 py-5 text-xs uppercase tracking-widest text-neutral-500 font-bold">Period</th>
+                        <th className="px-8 py-5 text-xs uppercase tracking-widest text-neutral-500 font-bold">Budget</th>
+                        <th className="px-8 py-5 text-xs uppercase tracking-widest text-neutral-500 font-bold">Alert</th>
+                        <th className="px-8 py-5 text-xs uppercase tracking-widest text-neutral-500 font-bold text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {configurations.map((config) => (
+                        <tr key={config.id} className="border-b border-brand-border last:border-0 hover:bg-white/[0.01] transition-colors group">
+                          <td className="px-8 py-6">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-neutral-800 flex items-center justify-center text-white">
+                                <Calendar size={18} />
+                              </div>
+                              <span className="font-medium text-lg">{config.month_name}</span>
                             </div>
-                            <span className="font-medium text-lg">{budget.month}</span>
-                          </div>
-                        </td>
-                        <td className="px-8 py-6">
-                          <span className="font-serif italic text-2xl">${budget.availableFunds.toLocaleString()}</span>
-                        </td>
-                        <td className="px-8 py-6 text-right">
-                          <span className="text-[10px] font-mono text-neutral-600 group-hover:text-neutral-400 transition-colors">{budget.id.slice(0, 8)}</span>
-                        </td>
-                      </tr>
-                    ))}
-                    {budgets.length === 0 && (
-                      <tr>
-                        <td colSpan={3} className="px-8 py-20 text-center text-neutral-500 font-medium italic">
-                          No budget infrastructure has been initialized.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                          </td>
+                          <td className="px-8 py-6 text-sm text-neutral-400">
+                            {config.start_counting} → {config.end_counting}
+                          </td>
+                          <td className="px-8 py-6">
+                            <span className="font-serif italic text-2xl">${config.available_money.toLocaleString()}</span>
+                          </td>
+                          <td className="px-8 py-6">
+                            <span className={`text-sm font-semibold ${config.expense_percentage_limit >= 80 ? 'text-red-400' : 'text-neutral-300'}`}>
+                              {config.expense_percentage_limit}%
+                            </span>
+                          </td>
+                          <td className="px-8 py-6 text-right">
+                            <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={() => openEditConfig(config)}
+                                className="p-2 hover:bg-neutral-800 rounded-xl text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                              >
+                                <Edit2 size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteConfig(config.id)}
+                                className="p-2 hover:bg-red-500/10 rounded-xl text-neutral-400 hover:text-red-500 transition-colors cursor-pointer"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {configurations.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="px-8 py-20 text-center text-neutral-500 font-medium italic">
+                            No period configuration has been initialized.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                )}
               </div>
             </Card>
           </div>
@@ -513,26 +771,52 @@ export default function App() {
         </form>
       </Modal>
 
-      <Modal 
-        isOpen={isBudgetModalOpen} 
-        onClose={() => setIsBudgetModalOpen(false)} 
-        title="Set Operational Budget"
+      <Modal
+        isOpen={isConfigModalOpen}
+        onClose={() => { setIsConfigModalOpen(false); setEditingConfig(null); }}
+        title={editingConfig ? 'Edit Period' : 'New Period'}
       >
-        <form onSubmit={handleAddBudget} className="space-y-5">
+        <form key={editingConfig?.id ?? 'new'} onSubmit={handleSaveConfig} className="space-y-5">
           <div className="space-y-2">
-            <label className="text-[10px] uppercase font-bold tracking-[0.2em] text-neutral-500 ml-1">Reporting Window</label>
-            <Input name="month" type="month" defaultValue={new Date().toISOString().slice(0, 7)} required />
+            <label className="text-[10px] uppercase font-bold tracking-[0.2em] text-neutral-500 ml-1">Month</label>
+            <select
+              name="month_available_money"
+              defaultValue={editingConfig?.month_available_money ?? ''}
+              required
+              className="w-full bg-neutral-900 border border-neutral-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-white transition-colors"
+            >
+              <option value="" disabled>Select a month…</option>
+              {MONTHS.map(m => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
           </div>
-          <div className="space-y-2">
-            <label className="text-[10px] uppercase font-bold tracking-[0.2em] text-neutral-500 ml-1">Planned Liquidity</label>
-            <Input name="funds" type="number" step="0.01" placeholder="Total funds for month" required />
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-[10px] uppercase font-bold tracking-[0.2em] text-neutral-500 ml-1">Start date</label>
+              <Input name="start_counting" type="date" defaultValue={editingConfig?.start_counting} required />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] uppercase font-bold tracking-[0.2em] text-neutral-500 ml-1">End date</label>
+              <Input name="end_counting" type="date" defaultValue={editingConfig?.end_counting} required />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-[10px] uppercase font-bold tracking-[0.2em] text-neutral-500 ml-1">Budget</label>
+              <Input name="available_money" type="number" step="0.01" defaultValue={editingConfig?.available_money} placeholder="0.00" required />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] uppercase font-bold tracking-[0.2em] text-neutral-500 ml-1">Alert threshold %</label>
+              <Input name="expense_percentage_limit" type="number" min="0" max="100" defaultValue={editingConfig?.expense_percentage_limit} placeholder="80" required />
+            </div>
           </div>
           <div className="pt-4 flex gap-3">
-            <Button variant="ghost" className="flex-1" onClick={() => setIsBudgetModalOpen(false)}>
-              Discard
+            <Button variant="ghost" className="flex-1" onClick={() => { setIsConfigModalOpen(false); setEditingConfig(null); }}>
+              Cancel
             </Button>
             <Button type="submit" className="flex-1 py-4 text-base">
-              Establish Budget
+              {editingConfig ? 'Save Changes' : 'Create Period'}
             </Button>
           </div>
         </form>

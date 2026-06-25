@@ -65,10 +65,3 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/expense-control-frontend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Tag and push version to git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ steps.version.outputs.tag }}
-          git push origin ${{ steps.version.outputs.tag }}

@@ -142,11 +142,12 @@ export default function App() {
     }
   }, []);
 
-  const fetchSpents = async () => {
+  const fetchSpents = async (search: string = filter) => {
     setIsSpentsLoading(true);
     try {
       const token = localStorage.getItem('auth_token');
-      const res = await fetch(`${API_URL}/spents`, {
+      const query = search ? `?search=${encodeURIComponent(search)}` : '';
+      const res = await fetch(`${API_URL}/spents${query}`, {
         headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
       });
       if (res.ok) {
@@ -163,11 +164,15 @@ export default function App() {
     }
   };
 
-  // Fetch spents from API whenever the user is set
+  // Fetch spents from API whenever the user is set, and re-fetch (debounced) whenever the search filter changes.
+  // The backend scopes results to the last configured period by default, or searches across every period when a filter is present.
   useEffect(() => {
     if (!user) return;
-    fetchSpents();
-  }, [user]);
+    const timeout = setTimeout(() => {
+      fetchSpents(filter);
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [user, filter]);
 
   // Fetch personal configurations from API whenever the user is set
   useEffect(() => {
@@ -192,12 +197,9 @@ export default function App() {
   };
 
   // Calculations
-  const currentMonth = new Date().toISOString().slice(0, 7);
-  const currentMonthExpenses = expenses.filter(e => e.date.startsWith(currentMonth));
-
-  const filteredExpenses = expenses.filter(e => 
-    e.name.toLowerCase().includes(filter.toLowerCase())
-  ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  // expenses already reflects the server's answer: the last configured period by default,
+  // or every matching row across all periods when a search filter is active.
+  const filteredExpenses = [...expenses].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   // Handlers
   const handleAuth = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -507,8 +509,8 @@ export default function App() {
         {view === 'dashboard' ? (
           <div className="space-y-10">
             {/* Financial Status Summary */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 glass rounded-[32px] p-8 md:p-10 relative overflow-hidden group">
+            <div className="w-full">
+              <div className="w-full glass rounded-[32px] p-8 md:p-10 relative overflow-hidden group">
                 <div className="relative z-10 flex flex-col h-full gap-8">
                   <div className="flex justify-between items-start">
                     <div className="space-y-1">
@@ -542,41 +544,40 @@ export default function App() {
                       </p>
                     </div>
                   </div>
+                  <div className="bg-neutral-900/40 border border-brand-border rounded-[32px] p-8 flex flex-col justify-between">
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-end">
+                        <p className="text-xs uppercase tracking-widest text-neutral-500 font-semibold">Spending Threshold</p>
+                        <span className="text-2xl font-serif italic">
+                          {dashboardSummary.percentageUsed?.percentageUser ?? 0}%
+                        </span>
+                      </div>
+                      <div className="h-3 bg-neutral-800 rounded-full overflow-hidden">
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{ width: `${dashboardSummary.percentageUsed?.percentageUser ?? 0}%` }}
+                          transition={{ duration: 1, ease: "easeOut" }}
+                          className={`h-full rounded-full ${
+                            dashboardSummary.percentageUsed?.color === 'red' ? 'bg-red-500' : 'bg-white'
+                          }`}
+                        />
+                      </div>
+                      <p className="text-[10px] text-neutral-500">Relative to current period configuration</p>
+                    </div>
+                
+                    {/* <div className="mt-8 flex items-center gap-4 p-4 rounded-2xl bg-white/5 border border-white/5">
+                      <div className="w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center text-orange-400">
+                        <History size={18} />
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">Last Entry</p>
+                        <p className="text-sm font-medium">{currentMonthExpenses.length > 0 ? (currentMonthExpenses[currentMonthExpenses.length - 1].name) : 'No activity recorded'}</p>
+                      </div>
+                    </div> */}
+                  </div>
                 </div>
                 {/* Visual accent */}
                 <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 blur-[80px] rounded-full translate-x-1/2 -translate-y-1/2" />
-              </div>
-
-              <div className="bg-neutral-900/40 border border-brand-border rounded-[32px] p-8 flex flex-col justify-between">
-                <div className="space-y-4">
-                  <div className="flex justify-between items-end">
-                    <p className="text-xs uppercase tracking-widest text-neutral-500 font-semibold">Spending Threshold</p>
-                    <span className="text-2xl font-serif italic">
-                      {dashboardSummary.percentageUsed?.percentageUser ?? 0}%
-                    </span>
-                  </div>
-                  <div className="h-3 bg-neutral-800 rounded-full overflow-hidden">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${dashboardSummary.percentageUsed?.percentageUser ?? 0}%` }}
-                      transition={{ duration: 1, ease: "easeOut" }}
-                      className={`h-full rounded-full ${
-                        dashboardSummary.percentageUsed?.color === 'red' ? 'bg-red-500' : 'bg-white'
-                      }`}
-                    />
-                  </div>
-                  <p className="text-[10px] text-neutral-500">Relative to current period configuration</p>
-                </div>
-                
-                <div className="mt-8 flex items-center gap-4 p-4 rounded-2xl bg-white/5 border border-white/5">
-                  <div className="w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center text-orange-400">
-                    <History size={18} />
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">Last Entry</p>
-                    <p className="text-sm font-medium">{currentMonthExpenses.length > 0 ? (currentMonthExpenses[currentMonthExpenses.length - 1].name) : 'No activity recorded'}</p>
-                  </div>
-                </div>
               </div>
             </div>
 

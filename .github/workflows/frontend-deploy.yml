@@ -12,6 +12,7 @@ on:
       - 'package*.json'
       - 'vite.config.ts'
       - '.github/workflows/frontend-deploy.yml'
+      - 'version'
 
 jobs:
   build-and-push:
@@ -24,24 +25,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve next version tag
+      - name: Resolve version tag
         id: version
         run: |
-          git fetch --tags
-          LATEST=$(git tag -l "v*" | sort -V | tail -n1)
-
-          if [ -z "$LATEST" ]; then
-            NEXT="v1.0.0"
-          else
-            MAJOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f1)
-            MINOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f2)
-            PATCH=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f3)
-            NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
-          fi
-
-          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
-          echo "Resolved next tag: $NEXT"
-
+          VERSION=$(cat version)
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: v${VERSION}"
+    
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 

@@ -1,10 +1,20 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
-import App from './App.tsx';
+import {RouterProvider} from 'react-router-dom';
+import {AuthProvider} from './context/AuthContext';
+import {LanguageProvider} from './context/LanguageContext';
+import {ThemeProvider} from './context/ThemeContext';
+import {router} from './router';
 import './index.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <AuthProvider>
+      <LanguageProvider>
+        <ThemeProvider>
+          <RouterProvider router={router} />
+        </ThemeProvider>
+      </LanguageProvider>
+    </AuthProvider>
   </StrictMode>,
 );

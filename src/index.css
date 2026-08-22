@@ -4,17 +4,33 @@
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-serif: "Playfair Display", serif;
-  
+
   --color-brand-bg: #050505;
   --color-brand-surface: #0f0f0f;
   --color-brand-border: rgba(255, 255, 255, 0.1);
   --color-brand-accent: #ffffff;
   --color-brand-muted: #888888;
+
+  /* Semantic status colors (expense/income) — constant across light/dark themes,
+     same treatment as the dataviz skill's "status palette": never themed. */
+  --color-expense: #f4667d;
+  --color-income: #34d399;
+}
+
+/* Stamped on <html> by ThemeContext ('light' | 'dark'; 'system' resolves to one of these
+   before the attribute is set, so this selector is the only theme switch needed). Dark
+   is the default via @theme above — this block only needs to override for light. */
+:root[data-theme="light"] {
+  --color-brand-bg: #fcfcfb;
+  --color-brand-surface: #ffffff;
+  --color-brand-border: rgba(11, 11, 11, 0.1);
+  --color-brand-accent: #0b0b0b;
+  --color-brand-muted: #6b6b6b;
 }
 
 @layer base {
   body {
-    @apply bg-brand-bg text-white font-sans antialiased selection:bg-white selection:text-black;
+    @apply bg-brand-bg text-brand-accent font-sans antialiased selection:bg-white selection:text-black;
   }
 }
 
